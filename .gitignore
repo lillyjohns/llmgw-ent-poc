@@ -1,0 +1,27 @@
+# Environment
+node_modules/
+dist/
+.env
+.env.local
+cdk.out/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# AWS
+.aws-sam/
+samconfig.toml
+
+# Test
+coverage/
+*.lcov
+
+# Docker
+.docker/

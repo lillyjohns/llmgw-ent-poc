@@ -1,0 +1,95 @@
+# Gateway Configuration
+# Compatible with LiteLLM config format where possible
+
+model_list:
+  # AWS Bedrock - Claude
+  - model_name: claude-3-sonnet
+    litellm_params:
+      model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
+      aws_region: us-east-1
+    routing:
+      rpm: 100
+      tpm: 200000
+      order: 1
+
+  - model_name: claude-3-sonnet
+    litellm_params:
+      model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
+      aws_region: us-west-2
+    routing:
+      rpm: 100
+      tpm: 200000
+      order: 2  # failover region
+
+  # AWS Bedrock - Claude Haiku (cheap tier)
+  - model_name: claude-3-haiku
+    litellm_params:
+      model: bedrock/anthropic.claude-3-haiku-20240307-v1:0
+      aws_region: us-east-1
+    routing:
+      rpm: 200
+      tpm: 400000
+
+  # OpenAI (passthrough)
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: secrets://openai-api-key  # resolved from Secrets Manager
+    routing:
+      rpm: 60
+      tpm: 150000
+
+  # Anthropic Direct
+  - model_name: claude-3-opus
+    litellm_params:
+      model: anthropic/claude-3-opus-20240229
+      api_key: secrets://anthropic-api-key
+    routing:
+      rpm: 30
+      tpm: 100000
+
+# Router settings
+router_settings:
+  routing_strategy: simple-shuffle  # simple-shuffle | latency-based | cost-based
+  retry_policy:
+    max_retries: 3
+    retry_after_seconds: 1
+    backoff_multiplier: 2
+  circuit_breaker:
+    failure_threshold: 5
+    recovery_timeout_seconds: 60
+  fallbacks:
+    - model: claude-3-sonnet
+      fallback: claude-3-haiku
+    - model: gpt-4o
+      fallback: claude-3-sonnet
+
+# Guardrails
+guardrails:
+  - guardrail_name: bedrock-content-filter
+    mode: [pre_call, post_call]
+    type: bedrock
+    guardrail_id: ${BEDROCK_GUARDRAIL_ID}
+    version: ${BEDROCK_GUARDRAIL_VERSION}
+    default_on: true
+
+  - guardrail_name: pii-mask
+    mode: pre_call
+    type: comprehend
+    actions:
+      CREDIT_CARD_NUMBER: MASK
+      EMAIL: MASK
+      PHONE: MASK
+      AWS_ACCESS_KEY: BLOCK
+
+# General settings
+general_settings:
+  master_key: ${MASTER_KEY}  # from Secrets Manager
+  port: 4000
+  log_level: info
+  enforce_budget: true
+  default_key_params:
+    max_budget: 50.00
+    budget_duration: 30d
+    rpm_limit: 60
+    tpm_limit: 100000
