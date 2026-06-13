@@ -17,6 +17,7 @@ export interface Deployment {
   provider: any; // BaseProvider
   rpm?: number;
   tpm?: number;
+  weight?: number;
   order: number;
 }
 

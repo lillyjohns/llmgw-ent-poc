@@ -1,7 +1,7 @@
 import {
   BedrockRuntimeClient,
-  InvokeModelCommand,
-  InvokeModelWithResponseStreamCommand,
+  ConverseCommand,
+  ConverseStreamCommand,
 } from '@aws-sdk/client-bedrock-runtime';
 import { BaseProvider, ProviderConfig, CompletionParams, CompletionResponse } from './base';
 import { logger } from '../../shared/logger';
@@ -19,129 +19,121 @@ export class BedrockProvider extends BaseProvider {
   async complete(params: CompletionParams): Promise<CompletionResponse> {
     const modelId = params.model;
 
-    // Transform OpenAI format → Bedrock format (Claude Messages API)
-    const bedrockBody = this.toBedrockFormat(params);
-
-    const command = new InvokeModelCommand({
-      modelId,
-      contentType: 'application/json',
-      accept: 'application/json',
-      body: JSON.stringify(bedrockBody),
-    });
-
-    const response = await this.client.send(command);
-    const responseBody = JSON.parse(new TextDecoder().decode(response.body));
-
-    // Transform Bedrock response → OpenAI format
-    return this.toOpenAIFormat(responseBody, params.model);
-  }
-
-  async *stream(params: CompletionParams): AsyncGenerator<string> {
-    const modelId = params.model;
-    const bedrockBody = this.toBedrockFormat(params);
-
-    const command = new InvokeModelWithResponseStreamCommand({
-      modelId,
-      contentType: 'application/json',
-      accept: 'application/json',
-      body: JSON.stringify(bedrockBody),
-    });
-
-    const response = await this.client.send(command);
-
-    if (response.body) {
-      for await (const event of response.body) {
-        if (event.chunk?.bytes) {
-          const chunk = JSON.parse(new TextDecoder().decode(event.chunk.bytes));
-          const sseData = this.chunkToSSE(chunk, params.model);
-          if (sseData) {
-            yield sseData;
-          }
-        }
-      }
-    }
-
-    // Send [DONE] marker
-    yield 'data: [DONE]\n\n';
-  }
-
-  private toBedrockFormat(params: CompletionParams): any {
-    // Claude Messages API format
+    // Use Converse API — works with ALL Bedrock models (Claude, DeepSeek, Llama, Mistral, Nova)
     const system = params.messages
       .filter(m => m.role === 'system')
-      .map(m => m.content)
-      .join('\n');
+      .map(m => ({ text: m.content }));
 
     const messages = params.messages
       .filter(m => m.role !== 'system')
       .map(m => ({
-        role: m.role,
-        content: [{ type: 'text', text: m.content }],
+        role: m.role as 'user' | 'assistant',
+        content: [{ text: m.content }],
       }));
 
-    return {
-      anthropic_version: 'bedrock-2023-05-31',
-      max_tokens: params.max_tokens || 4096,
-      temperature: params.temperature,
-      top_p: params.top_p,
-      ...(system && { system }),
+    const command = new ConverseCommand({
+      modelId,
       messages,
-    };
-  }
+      ...(system.length > 0 && { system }),
+      inferenceConfig: {
+        maxTokens: params.max_tokens || 4096,
+        temperature: params.temperature,
+        topP: params.top_p,
+      },
+    });
 
-  private toOpenAIFormat(bedrockResponse: any, model: string): CompletionResponse {
+    const startTime = Date.now();
+    const response = await this.client.send(command);
+    const latency = Date.now() - startTime;
+
+    const outputText = response.output?.message?.content?.[0]?.text || '';
+
+    logger.info({ modelId, latency, tokens: response.usage?.totalTokens }, 'Bedrock Converse completed');
+
     return {
-      id: `chatcmpl-${Date.now()}`,
+      id: `chatcmpl-${Date.now().toString(36)}`,
       object: 'chat.completion',
       created: Math.floor(Date.now() / 1000),
-      model,
+      model: modelId,
       choices: [{
         index: 0,
         message: {
           role: 'assistant',
-          content: bedrockResponse.content?.[0]?.text || '',
+          content: outputText,
         },
-        finish_reason: bedrockResponse.stop_reason === 'end_turn' ? 'stop' : bedrockResponse.stop_reason,
+        finish_reason: response.stopReason === 'end_turn' ? 'stop' : (response.stopReason || 'stop'),
       }],
       usage: {
-        prompt_tokens: bedrockResponse.usage?.input_tokens || 0,
-        completion_tokens: bedrockResponse.usage?.output_tokens || 0,
-        total_tokens: (bedrockResponse.usage?.input_tokens || 0) + (bedrockResponse.usage?.output_tokens || 0),
+        prompt_tokens: response.usage?.inputTokens || 0,
+        completion_tokens: response.usage?.outputTokens || 0,
+        total_tokens: response.usage?.totalTokens || 0,
       },
     };
   }
 
-  private chunkToSSE(chunk: any, model: string): string | null {
-    if (chunk.type === 'content_block_delta' && chunk.delta?.text) {
-      const data = {
-        id: `chatcmpl-${Date.now()}`,
-        object: 'chat.completion.chunk',
-        created: Math.floor(Date.now() / 1000),
-        model,
-        choices: [{
-          index: 0,
-          delta: { content: chunk.delta.text },
-          finish_reason: null,
-        }],
-      };
-      return `data: ${JSON.stringify(data)}\n\n`;
+  async *stream(params: CompletionParams): AsyncGenerator<string> {
+    const modelId = params.model;
+
+    const system = params.messages
+      .filter(m => m.role === 'system')
+      .map(m => ({ text: m.content }));
+
+    const messages = params.messages
+      .filter(m => m.role !== 'system')
+      .map(m => ({
+        role: m.role as 'user' | 'assistant',
+        content: [{ text: m.content }],
+      }));
+
+    const command = new ConverseStreamCommand({
+      modelId,
+      messages,
+      ...(system.length > 0 && { system }),
+      inferenceConfig: {
+        maxTokens: params.max_tokens || 4096,
+        temperature: params.temperature,
+        topP: params.top_p,
+      },
+    });
+
+    const response = await this.client.send(command);
+    const id = `chatcmpl-${Date.now().toString(36)}`;
+    const created = Math.floor(Date.now() / 1000);
+
+    if (response.stream) {
+      for await (const event of response.stream) {
+        if (event.contentBlockDelta?.delta?.text) {
+          const chunk = {
+            id,
+            object: 'chat.completion.chunk',
+            created,
+            model: modelId,
+            choices: [{
+              index: 0,
+              delta: { content: event.contentBlockDelta.delta.text },
+              finish_reason: null,
+            }],
+          };
+          yield `data: ${JSON.stringify(chunk)}\n\n`;
+        }
+
+        if (event.messageStop) {
+          const chunk = {
+            id,
+            object: 'chat.completion.chunk',
+            created,
+            model: modelId,
+            choices: [{
+              index: 0,
+              delta: {},
+              finish_reason: 'stop',
+            }],
+          };
+          yield `data: ${JSON.stringify(chunk)}\n\n`;
+        }
+      }
     }
 
-    if (chunk.type === 'message_stop') {
-      const data = {
-        id: `chatcmpl-${Date.now()}`,
-        object: 'chat.completion.chunk',
-        created: Math.floor(Date.now() / 1000),
-        model,
-        choices: [{
-          index: 0,
-          delta: {},
-          finish_reason: 'stop',
-        }],
-      };
-      return `data: ${JSON.stringify(data)}\n\n`;
-    }
-
-    return null;
+    yield 'data: [DONE]\n\n';
   }
 }

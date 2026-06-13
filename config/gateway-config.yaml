@@ -2,51 +2,87 @@
 # Compatible with LiteLLM config format where possible
 
 model_list:
-  # AWS Bedrock - Claude
-  - model_name: claude-3-sonnet
+  # AWS Bedrock - Claude Sonnet 4.6 (primary smart model)
+  - model_name: claude-sonnet
     litellm_params:
-      model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
+      model: bedrock/us.anthropic.claude-sonnet-4-6
       aws_region: us-east-1
     routing:
       rpm: 100
       tpm: 200000
+      weight: 70
       order: 1
 
-  - model_name: claude-3-sonnet
+  # AWS Bedrock - DeepSeek V3.2 (cost-effective alternative)
+  - model_name: deepseek
     litellm_params:
-      model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
-      aws_region: us-west-2
+      model: bedrock/deepseek.v3.2
+      aws_region: us-east-1
     routing:
       rpm: 100
       tpm: 200000
-      order: 2  # failover region
+      weight: 50
 
-  # AWS Bedrock - Claude Haiku (cheap tier)
-  - model_name: claude-3-haiku
+  # AWS Bedrock - Claude 3.5 Haiku (fast/cheap tier) via inference profile
+  - model_name: claude-haiku
     litellm_params:
-      model: bedrock/anthropic.claude-3-haiku-20240307-v1:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       aws_region: us-east-1
     routing:
       rpm: 200
       tpm: 400000
+      weight: 100
 
-  # OpenAI (passthrough)
-  - model_name: gpt-4o
+  # AWS Bedrock - Amazon Nova Pro (AWS-native)
+  - model_name: nova-pro
     litellm_params:
-      model: openai/gpt-4o
-      api_key: secrets://openai-api-key  # resolved from Secrets Manager
+      model: bedrock/amazon.nova-pro-v1:0
+      aws_region: us-east-1
+    routing:
+      rpm: 100
+      tpm: 200000
+      weight: 40
+
+  # AWS Bedrock - Meta Llama 3.3 70B (open-source alternative)
+  - model_name: llama
+    litellm_params:
+      model: bedrock/us.meta.llama3-3-70b-instruct-v1:0
+      aws_region: us-east-1
     routing:
       rpm: 60
       tpm: 150000
+      weight: 30
 
-  # Anthropic Direct
-  - model_name: claude-3-opus
+  # Multi-model routing group: "best-available" picks from top models
+  - model_name: best-available
     litellm_params:
-      model: anthropic/claude-3-opus-20240229
-      api_key: secrets://anthropic-api-key
+      model: bedrock/us.anthropic.claude-sonnet-4-6
+      aws_region: us-east-1
     routing:
-      rpm: 30
-      tpm: 100000
+      rpm: 100
+      tpm: 200000
+      weight: 50
+      order: 1
+
+  - model_name: best-available
+    litellm_params:
+      model: bedrock/deepseek.v3.2
+      aws_region: us-east-1
+    routing:
+      rpm: 100
+      tpm: 200000
+      weight: 30
+      order: 2
+
+  - model_name: best-available
+    litellm_params:
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      aws_region: us-east-1
+    routing:
+      rpm: 200
+      tpm: 400000
+      weight: 20
+      order: 3  # budget fallback
 
 # Router settings
 router_settings:
@@ -59,10 +95,12 @@ router_settings:
     failure_threshold: 5
     recovery_timeout_seconds: 60
   fallbacks:
-    - model: claude-3-sonnet
-      fallback: claude-3-haiku
-    - model: gpt-4o
-      fallback: claude-3-sonnet
+    - model: claude-sonnet
+      fallback: deepseek
+    - model: deepseek
+      fallback: claude-haiku
+    - model: best-available
+      fallback: claude-haiku
 
 # Guardrails
 guardrails:

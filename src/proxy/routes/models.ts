@@ -6,7 +6,7 @@ export async function modelsRoute(app: FastifyInstance) {
     const config = await loadConfig();
 
     // Deduplicate model names
-    const modelNames = [...new Set(config.model_list.map((m: any) => m.model_name))];
+    const modelNames = [...new Set(config.model_list.map((m: any) => m.model_name))] as string[];
 
     const models = modelNames.map((name: string) => ({
       id: name,
