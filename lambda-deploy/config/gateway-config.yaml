@@ -1,0 +1,133 @@
+# Gateway Configuration
+# Compatible with LiteLLM config format where possible
+
+model_list:
+  # AWS Bedrock - Claude Sonnet 4.6 (primary smart model)
+  - model_name: claude-sonnet
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-6
+      aws_region: us-east-1
+    routing:
+      rpm: 100
+      tpm: 200000
+      weight: 70
+      order: 1
+
+  # AWS Bedrock - DeepSeek V3.2 (cost-effective alternative)
+  - model_name: deepseek
+    litellm_params:
+      model: bedrock/deepseek.v3.2
+      aws_region: us-east-1
+    routing:
+      rpm: 100
+      tpm: 200000
+      weight: 50
+
+  # AWS Bedrock - Claude 3.5 Haiku (fast/cheap tier) via inference profile
+  - model_name: claude-haiku
+    litellm_params:
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      aws_region: us-east-1
+    routing:
+      rpm: 200
+      tpm: 400000
+      weight: 100
+
+  # AWS Bedrock - Amazon Nova Pro (AWS-native)
+  - model_name: nova-pro
+    litellm_params:
+      model: bedrock/amazon.nova-pro-v1:0
+      aws_region: us-east-1
+    routing:
+      rpm: 100
+      tpm: 200000
+      weight: 40
+
+  # AWS Bedrock - Meta Llama 3.3 70B (open-source alternative)
+  - model_name: llama
+    litellm_params:
+      model: bedrock/us.meta.llama3-3-70b-instruct-v1:0
+      aws_region: us-east-1
+    routing:
+      rpm: 60
+      tpm: 150000
+      weight: 30
+
+  # Multi-model routing group: "best-available" picks from top models
+  - model_name: best-available
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-6
+      aws_region: us-east-1
+    routing:
+      rpm: 100
+      tpm: 200000
+      weight: 50
+      order: 1
+
+  - model_name: best-available
+    litellm_params:
+      model: bedrock/deepseek.v3.2
+      aws_region: us-east-1
+    routing:
+      rpm: 100
+      tpm: 200000
+      weight: 30
+      order: 2
+
+  - model_name: best-available
+    litellm_params:
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      aws_region: us-east-1
+    routing:
+      rpm: 200
+      tpm: 400000
+      weight: 20
+      order: 3  # budget fallback
+
+# Router settings
+router_settings:
+  routing_strategy: simple-shuffle  # simple-shuffle | latency-based | cost-based
+  retry_policy:
+    max_retries: 3
+    retry_after_seconds: 1
+    backoff_multiplier: 2
+  circuit_breaker:
+    failure_threshold: 5
+    recovery_timeout_seconds: 60
+  fallbacks:
+    - model: claude-sonnet
+      fallback: deepseek
+    - model: deepseek
+      fallback: claude-haiku
+    - model: best-available
+      fallback: claude-haiku
+
+# Guardrails
+guardrails:
+  - guardrail_name: bedrock-content-filter
+    mode: [pre_call, post_call]
+    type: bedrock
+    guardrail_id: ${BEDROCK_GUARDRAIL_ID}
+    version: ${BEDROCK_GUARDRAIL_VERSION}
+    default_on: true
+
+  - guardrail_name: pii-mask
+    mode: pre_call
+    type: comprehend
+    actions:
+      CREDIT_CARD_NUMBER: MASK
+      EMAIL: MASK
+      PHONE: MASK
+      AWS_ACCESS_KEY: BLOCK
+
+# General settings
+general_settings:
+  master_key: ${MASTER_KEY}  # from Secrets Manager
+  port: 4000
+  log_level: info
+  enforce_budget: true
+  default_key_params:
+    max_budget: 50.00
+    budget_duration: 30d
+    rpm_limit: 60
+    tpm_limit: 100000
