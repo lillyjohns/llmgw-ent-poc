@@ -3,6 +3,7 @@ import { logger } from '../../shared/logger';
 import type { Deployment } from '../../shared/types';
 import { BedrockProvider } from '../providers/bedrock';
 import { OpenAIProvider } from '../providers/openai';
+import { OpenRouterProvider } from '../providers/openrouter';
 
 export class Router {
   private async getConfig() {
@@ -83,6 +84,9 @@ export class Router {
     switch (providerName) {
       case 'bedrock':
         provider = new BedrockProvider(modelConfig.litellm_params);
+        break;
+      case 'openrouter':
+        provider = new OpenRouterProvider(modelConfig.litellm_params);
         break;
       case 'openai':
         provider = new OpenAIProvider(modelConfig.litellm_params);

@@ -31,6 +31,7 @@ export interface CompletionResponse {
     completion_tokens: number;
     total_tokens: number;
   };
+  [key: string]: any; // Allow provider-specific metadata
 }
 
 export abstract class BaseProvider {

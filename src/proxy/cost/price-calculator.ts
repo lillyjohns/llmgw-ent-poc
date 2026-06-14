@@ -13,6 +13,20 @@ const PRICE_TABLE: Record<string, { input: number; output: number }> = {
 
 export class CostTracker {
   /**
+   * Calculate cost for given usage without recording.
+   */
+  calculateCost(
+    model: string,
+    usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+  ): number {
+    const price = PRICE_TABLE[model] || { input: 3.0, output: 15.0 };
+    return (
+      (usage.prompt_tokens / 1_000_000) * price.input +
+      (usage.completion_tokens / 1_000_000) * price.output
+    );
+  }
+
+  /**
    * Record token usage and update spend for a key.
    */
   async recordUsage(

@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { KeyValidator } from '../auth/key-validator';
+import { DynamoKeyValidator } from '../auth/dynamo-key-validator';
 import { Router } from '../router';
 import { CostTracker } from '../cost/price-calculator';
 import { logger } from '../../shared/logger';
@@ -44,8 +45,26 @@ export async function chatCompletionsRoute(app: FastifyInstance) {
       });
     }
 
-    // 4. Check budget
-    if (keyInfo.max_budget && keyInfo.spend >= keyInfo.max_budget) {
+    // 4. Check budget (DynamoDB-backed for persistent tracking)
+    const useDynamo = process.env.USE_DYNAMODB === 'true';
+    const dynamoValidator = useDynamo ? new DynamoKeyValidator() : null;
+
+    if (useDynamo && dynamoValidator) {
+      // Pre-request budget estimation (estimate ~$0.001 per request as baseline)
+      const estimatedCost = 0.001;
+      const budgetCheck = await dynamoValidator.checkBudgetPreRequest(apiKey, estimatedCost);
+      if (!budgetCheck.allowed) {
+        return reply.code(429).send({
+          error: {
+            message: `Budget exceeded. Limit: $${budgetCheck.maxBudget}, Remaining: $${budgetCheck.remaining.toFixed(4)}. Request rejected PRE-CALL (saved money).`,
+            type: 'budget_exceeded',
+            code: '429',
+            pre_request: true,
+          }
+        });
+      }
+    } else if (keyInfo.max_budget && keyInfo.spend >= keyInfo.max_budget) {
+      // Fallback to in-memory check
       return reply.code(429).send({
         error: { message: `Budget exceeded. Limit: $${keyInfo.max_budget}, Spent: $${keyInfo.spend.toFixed(4)}`, type: 'budget_exceeded', code: '429' }
       });
@@ -105,9 +124,16 @@ export async function chatCompletionsRoute(app: FastifyInstance) {
           top_p: params.top_p,
         });
 
-        // Track cost
+        // Track cost (DynamoDB + local)
         const costTracker = new CostTracker();
+        const cost = costTracker.calculateCost(model, response.usage);
         await costTracker.recordUsage(keyInfo.key_id, model, response.usage);
+
+        // Persist spend to DynamoDB
+        if (dynamoValidator && cost > 0) {
+          const spendResult = await dynamoValidator.incrementSpend(apiKey, cost);
+          logger.info({ key_id: keyInfo.key_id, cost, newSpend: spendResult.newSpend, budgetExceeded: spendResult.budgetExceeded }, 'Spend recorded in DynamoDB');
+        }
 
         const latency = Date.now() - startTime;
         logger.info({
