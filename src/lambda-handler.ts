@@ -1,4 +1,5 @@
 import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
+import { handleAdminRoute } from './proxy/admin/admin-routes';
 
 // Minimal Lambda handler that wraps our Fastify app
 // For POC: deploy as a single Lambda with Function URL
@@ -32,7 +33,22 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   if (path === '/gateway/info') {
     const config = await loadConfig();
     const models = [...new Set(config.model_list.map((m: any) => m.model_name))];
-    return { statusCode: 200, body: JSON.stringify({ name: 'llmgw-ent-poc', version: '0.2.0', models_available: models, runtime: 'lambda', features: { dynamodb_budget: useDynamo, openrouter_fallback: true } }) };
+    return { statusCode: 200, body: JSON.stringify({ name: 'llmgw-ent-poc', version: '0.2.0', models_available: models, runtime: 'lambda', features: { dynamodb_budget: useDynamo, openrouter_fallback: true, admin_api: true } }) };
+  }
+
+  // Admin Routes (/admin/*)
+  if (path.startsWith('/admin/')) {
+    const masterKey = process.env.MASTER_KEY || 'sk-llmgw-master';
+    const authHeader = headers.authorization || headers.Authorization || '';
+    const providedKey = authHeader.replace('Bearer ', '');
+    if (providedKey !== masterKey) {
+      return { statusCode: 403, body: JSON.stringify({ error: { message: 'Forbidden: master key required for admin endpoints', type: 'auth_error' } }) };
+    }
+    const queryString = event.rawQueryString || '';
+    const queryParams: Record<string, string> = {};
+    queryString.split('&').forEach((p: string) => { const [k, v] = p.split('='); if (k) queryParams[k] = decodeURIComponent(v || ''); });
+    const adminResponse = await handleAdminRoute(method, path, body, queryParams);
+    return { statusCode: adminResponse.statusCode, headers: { 'Content-Type': 'application/json' }, body: adminResponse.body };
   }
 
   // Chat completions
