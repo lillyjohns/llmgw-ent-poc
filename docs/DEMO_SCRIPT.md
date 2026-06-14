@@ -254,6 +254,75 @@ x-model-used: nvidia/nemotron-3-super-120b-a12b:free
 
 ---
 
+## 🖥️ Admin UI Walkthrough (เปิดหน้าจอให้คนดู)
+
+**URL:** https://d3czi4uxbud7mg.cloudfront.net
+
+### Step 1: Dashboard (หน้าแรก)
+**พูด:** "นี่คือ single pane of glass — เห็นทุกอย่างที่เกิดขึ้นใน gateway"
+
+- 📊 **Stats:** Total Requests (12,847), Active Keys (34), Total Spend ($127.43), Avg Latency (342ms)
+- 📈 **Requests by Model:** เห็น % distribution — Claude 42%, DeepSeek 28%, Haiku 15%
+- 💰 **Spend by Team:** Engineering $67/$200, Marketing $9/$10 ⚠️ (เกือบหมด!)
+- 📋 **Recent Requests table:** real-time log แสดง key, model, tokens, latency, cost, status
+  - ✓ OK (สีเขียว)
+  - ✗ Denied (สีแดง — Model not allowed)
+  - $ Over (สีเหลือง — Budget exceeded)
+
+### Step 2: Virtual Keys (`/keys`)
+**พูด:** "สร้าง key ให้แต่ละทีม — กำหนด budget, model, rate limit แยกกัน"
+
+- แสดง key list: ชื่อ, team, models allowed, budget used/limit
+- ตัวอย่าง:
+  - `eng-prod-01` → All models, $200 budget
+  - `mkt-team-03` → Haiku + Nova only, $10 budget ⚠️
+  - `intern-key` → Haiku only, $5 budget
+
+**Demo action:** "ถ้า Marketing ขอ budget เพิ่ม — admin แก้ตรงนี้ ไม่ต้อง deploy อะไร"
+
+### Step 3: Models (`/models`)
+**พูด:** "config models ผ่าน UI — เพิ่ม/ลบ models, ปรับ weight, set fallback chain"
+
+- 5 Bedrock models + 1 OpenRouter fallback
+- แต่ละ model แสดง: weight, RPM/TPM limit, cost per token
+- Fallback chain: claude-sonnet → deepseek → claude-haiku → openrouter-nemotron
+
+### Step 4: Usage & Spend (`/usage`)
+**พูด:** "CFO ต้องการ — breakdown cost per model, per team, per day"
+
+- กราฟ daily spend (line chart)
+- Table: model × team × cost
+- Export ได้เป็น CSV
+
+### Step 5: Guardrails (`/guardrails`)
+**พูด:** "Security layer — PII masking, content moderation, prompt injection detection"
+
+- Bedrock Guardrails (native content filter)
+- Comprehend PII: auto-mask credit card, email, phone
+- Custom rules: block specific keywords
+
+### Step 6: Playground (`/playground`)
+**พูด:** "ทดสอบ model ได้เลยจากหน้า UI — ไม่ต้องเปิด terminal"
+
+- เลือก model, พิมพ์ prompt, กด Send
+- เห็น response + metadata (tokens, cost, latency, routed model)
+- สะดวกสำหรับ non-technical admin
+
+---
+
+## 🎯 Admin Config Demo Flow (แนะนำ)
+
+1. เปิด Dashboard → ชี้ให้เห็น Marketing ⚠️ budget เกือบหมด
+2. ไป Virtual Keys → แสดง `mkt-team-03` budget $9/$10
+3. ทำ curl ด้วย budget-low key → โดน reject 429
+4. กลับมาที่ Models → แสดง fallback chain
+5. ไป Playground → พิมพ์ "Hello" → เห็น response + metadata
+6. ไป Usage → แสดง cost breakdown
+
+**Key message:** "Admin ไม่ต้องแตะ code เลย — ทุกอย่าง self-service ผ่าน UI"
+
+---
+
 ## 🛠 Quick Setup (ถ้าคนดูอยากลอง)
 
 ```bash
