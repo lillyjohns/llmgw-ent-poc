@@ -1,18 +1,34 @@
 # Architecture Decision Records
 
-## ADR-001: Fargate over Lambda for Core Proxy
+## ADR-001: API Gateway + Lambda for Core Proxy
 
-**Status:** Accepted
+**Status:** Accepted (Updated 2026-06-14)
 
-**Context:** The core proxy needs to handle SSE streaming with low latency. Lambda has cold starts (100-500ms) and streaming support is limited to Function URLs (bypasses API Gateway).
+**Context:** The core proxy needs to handle SSE streaming with low latency. Originally chose ALB + Fargate because API Gateway didn't support response streaming. As of Nov 2025, API Gateway REST API now supports response streaming (ref: [AWS Blog](https://aws.amazon.com/blogs/compute/building-responsive-apis-with-amazon-api-gateway-response-streaming/)).
 
-**Decision:** Use Fargate with ALB for the core proxy. Lambda for admin/async operations.
+**Decision:** Use API Gateway + Lambda for the core proxy. This replaces the earlier ALB + Fargate decision.
+
+**Rationale:**
+- API GW now supports SSE/chunked streaming via HTTP proxy integration
+- Response payload > 10MB supported
+- Timeout extended up to 15 minutes (sufficient for LLM calls)
+- Built-in WAF, throttling, API keys, usage plans — zero additional config
+- Pay-per-request economics ideal for variable LLM traffic
+- Zero server management (no patching, no capacity planning, no health checks)
+- Cold start mitigated with Provisioned Concurrency if needed (~100-500ms without)
+
+**When to reconsider ALB + ECS/Fargate:**
+- Traffic > 1M requests/month sustained (cost crossover)
+- Sub-10ms latency requirements (cold start unacceptable)
+- WebSocket/bidirectional streaming needed
+- Custom TCP/protocol requirements
 
 **Consequences:**
-- Always-warm: no cold start penalty
-- Native HTTP streaming via ALB chunked transfer
-- Slightly higher base cost (~$30/mo minimum for 0.25 vCPU)
-- Can horizontally scale via ECS Service Auto Scaling
+- Lambda-native: zip deploy, fast iteration
+- Streaming: enabled via API GW response streaming (Nov 2025 feature)
+- Budget: ~$0 at POC scale, scales linearly
+- Observability: CloudWatch Logs + X-Ray built-in
+- Current deployment: `llmgw-gateway` Lambda + API GW `7qegf6lerf`
 
 ---
 
@@ -70,23 +86,31 @@ AUDIT#<timestamp>     | <entity_id>                  | Audit log entry
 
 ## ADR-004: Streaming Architecture
 
-**Status:** Accepted
+**Status:** Updated (2026-06-14)
 
 **Context:** OpenAI-compatible streaming uses Server-Sent Events (SSE). Need to support `stream: true` with minimal latency overhead.
 
-**Decision:** ALB → Fargate with chunked transfer encoding.
+**Decision:** API Gateway response streaming → Lambda → Provider SSE.
 
 **Flow:**
 1. Client sends `POST /v1/chat/completions` with `stream: true`
-2. ALB forwards to Fargate task
-3. Fargate opens streaming connection to provider (Bedrock InvokeModelWithResponseStream / OpenAI SSE)
-4. Fargate transforms provider chunks → OpenAI SSE format
-5. Chunks forwarded to client via ALB (HTTP/1.1 chunked or HTTP/2)
+2. API Gateway forwards to Lambda (response streaming enabled)
+3. Lambda opens streaming connection to provider (Bedrock InvokeModelWithResponseStream / OpenRouter SSE)
+4. Lambda transforms provider chunks → OpenAI SSE format
+5. Chunks streamed back to client via API GW response streaming
+
+**Key Config:**
+- API GW: Response streaming enabled on route
+- Lambda: Response streaming mode (via Function URL or API GW HTTP proxy)
+- Timeout: up to 15 minutes supported
+- Payload: > 10MB supported
+
+**Ref:** https://aws.amazon.com/blogs/compute/building-responsive-apis-with-amazon-api-gateway-response-streaming/
 
 **Consequences:**
-- Sub-100ms time-to-first-token overhead
-- ALB idle timeout: set to 300s for long responses
-- Connection draining handled by ECS
+- Comparable TTFB to ALB + Fargate
+- No ALB idle timeout management needed
+- Serverless scaling (no ECS task sizing)
 
 ---
 

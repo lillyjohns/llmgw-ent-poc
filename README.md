@@ -26,26 +26,27 @@ AWS doesn't have a managed LLM Gateway service comparable to LiteLLM Enterprise.
 └────────────────────────┬────────────────────────────────┘
                          │
               ┌──────────▼──────────┐
-              │   ALB (HTTPS/SSE)   │
+              │  API Gateway (REST) │  ← WAF, throttling, response streaming
               └──────────┬──────────┘
                          │
               ┌──────────▼──────────┐
-              │   Fargate Service   │  ← Core Proxy (always-warm)
+              │   Lambda Function   │  ← Core Proxy (serverless)
               │  ┌───────────────┐  │
-              │  │ Auth Layer    │  │  ← Cognito JWT / Virtual Key validation
-              │  │ Router        │  │  ← Weighted, latency-based, failover
+              │  │ Auth (DynamoDB)│  │  ← Virtual keys + persistent budget
+              │  │ Router        │  │  ← Weighted, failover, multi-provider
               │  │ Guardrails    │  │  ← Pre/post-call hooks
-              │  │ Cost Tracker  │  │  ← Token counting + DDB writes
+              │  │ Cost Tracker  │  │  ← Atomic spend via DDB UpdateItem
               │  └───────────────┘  │
               └──────────┬──────────┘
                          │
          ┌───────────────┼───────────────┐
          ▼               ▼               ▼
 ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
-│ AWS Bedrock │  │  OpenAI API │  │ Anthropic   │
-│ (Claude,    │  │ (passthru)  │  │ (direct)    │
-│  Titan,     │  │             │  │             │
-│  Llama)     │  │             │  │             │
+│ AWS Bedrock │  │  OpenRouter  │  │  OpenAI API │
+│ (Claude,    │  │ (fallback)   │  │ (passthru)  │
+│  DeepSeek,  │  │  Nemotron,   │  │             │
+│  Llama,     │  │  Gemma, etc  │  │             │
+│  Nova)      │  │              │  │             │
 └─────────────┘  └─────────────┘  └─────────────┘
 
          ┌───────────────────────────────────┐
