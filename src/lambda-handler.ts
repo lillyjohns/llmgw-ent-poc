@@ -13,7 +13,14 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const path = event.rawPath;
   const method = event.requestContext.http.method;
   const headers = event.headers || {};
-  const body = event.body ? JSON.parse(event.body) : {};
+  let body: any = {};
+  if (event.body) {
+    try {
+      body = JSON.parse(event.body);
+    } catch (e) {
+      return { statusCode: 400, body: JSON.stringify({ error: { message: 'Invalid JSON in request body', type: 'invalid_request', code: '400' } }) };
+    }
+  }
   const useDynamo = process.env.USE_DYNAMODB === 'true';
 
   // Health check
