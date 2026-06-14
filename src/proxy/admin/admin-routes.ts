@@ -1,6 +1,10 @@
 import * as crypto from 'crypto';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand, DeleteCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { userNew, userInfo, userUpdate, userDelete, userList, userAvailableRoles } from './user-routes';
+import { orgNew, orgInfo, orgUpdate, orgDelete, orgList, orgMembers } from './org-routes';
+import { guardrailCreate, guardrailGet, guardrailUpdate, guardrailDelete, guardrailList } from './guardrail-routes';
+import { globalSpendReport, globalSpendProvider, globalActivity } from './global-spend-routes';
 
 const client = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1' });
 const docClient = DynamoDBDocumentClient.from(client, { marshallOptions: { removeUndefinedValues: true } });
@@ -792,6 +796,25 @@ export async function handleAdminRoute(
   // Normalize path (remove trailing slash)
   const normalizedPath = path.replace(/\/$/, '');
 
+  // Handle routes with dynamic IDs (guardrails/<id>)
+  const guardrailMatch = normalizedPath.match(/^\/admin\/guardrails\/(.+)$/);
+  if (guardrailMatch) {
+    const guardrailId = guardrailMatch[1];
+    // Don't match 'list' as an ID
+    if (guardrailId !== 'list') {
+      switch (method) {
+        case 'GET':
+          return guardrailGet(guardrailId);
+        case 'PUT':
+          return guardrailUpdate(guardrailId, body);
+        case 'DELETE':
+          return guardrailDelete(guardrailId);
+        default:
+          return jsonResponse(405, { error: { message: `Method ${method} not allowed for guardrails/<id>`, type: 'method_not_allowed' } });
+      }
+    }
+  }
+
   switch (`${method} ${normalizedPath}`) {
     // Key Management
     case 'POST /admin/key/generate':
@@ -821,6 +844,48 @@ export async function handleAdminRoute(
     case 'GET /admin/team/list':
       return teamList();
 
+    // User Management
+    case 'POST /admin/user/new':
+      return userNew(body);
+    case 'GET /admin/user/info':
+      return userInfo(queryParams);
+    case 'POST /admin/user/update':
+      return userUpdate(body);
+    case 'POST /admin/user/delete':
+      return userDelete(body);
+    case 'GET /admin/user/list':
+      return userList();
+    case 'GET /admin/user/available_roles':
+      return userAvailableRoles();
+
+    // Organization Management
+    case 'POST /admin/organization/new':
+      return orgNew(body);
+    case 'GET /admin/organization/info':
+      return orgInfo(queryParams);
+    case 'PATCH /admin/organization/update':
+      return orgUpdate(body);
+    case 'DELETE /admin/organization/delete':
+      return orgDelete(queryParams);
+    case 'GET /admin/organization/list':
+      return orgList();
+    case 'GET /admin/organization/members':
+      return orgMembers(queryParams);
+
+    // Guardrails Management
+    case 'GET /admin/guardrails/list':
+      return guardrailList();
+    case 'POST /admin/guardrails':
+      return guardrailCreate(body);
+
+    // Global Spend Reports
+    case 'GET /admin/global/spend/report':
+      return globalSpendReport(queryParams);
+    case 'GET /admin/global/spend/provider':
+      return globalSpendProvider();
+    case 'GET /admin/global/activity':
+      return globalActivity(queryParams);
+
     // Model Management
     case 'GET /admin/model/list':
       return modelList();
@@ -840,6 +905,6 @@ export async function handleAdminRoute(
       return spendReset(queryParams);
 
     default:
-      return jsonResponse(404, { error: `Admin route not found: ${method} ${normalizedPath}` });
+      return jsonResponse(404, { error: { message: `Admin route not found: ${method} ${normalizedPath}`, type: 'not_found' } });
   }
 }
