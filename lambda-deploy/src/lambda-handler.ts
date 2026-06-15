@@ -1,7 +1,5 @@
 import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-
-// Minimal Lambda handler that wraps our Fastify app
-// For POC: deploy as a single Lambda with Function URL
+import { handleAdminRoute } from './proxy/admin/admin-routes';
 
 const { loadConfig } = require('./shared/config');
 const { Router } = require('./proxy/router');
@@ -13,8 +11,18 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const path = event.rawPath;
   const method = event.requestContext.http.method;
   const headers = event.headers || {};
-  const body = event.body ? JSON.parse(event.body) : {};
+  let body: any = {};
+  if (event.body) {
+    try { body = JSON.parse(event.body); } catch (e) {
+      return { statusCode: 400, body: JSON.stringify({ error: { message: 'Invalid JSON in request body', type: 'invalid_request', code: '400' } }) };
+    }
+  }
   const useDynamo = process.env.USE_DYNAMODB === 'true';
+
+  // CORS: handle OPTIONS preflight
+  if (method === 'OPTIONS') {
+    return { statusCode: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'authorization,content-type,x-requested-with', 'Access-Control-Max-Age': '86400' }, body: '' };
+  }
 
   // Health check
   if (path === '/health') {
@@ -25,7 +33,22 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   if (path === '/gateway/info') {
     const config = await loadConfig();
     const models = [...new Set(config.model_list.map((m: any) => m.model_name))];
-    return { statusCode: 200, body: JSON.stringify({ name: 'llmgw-ent-poc', version: '0.2.0', models_available: models, runtime: 'lambda', features: { dynamodb_budget: useDynamo, openrouter_fallback: true } }) };
+    return { statusCode: 200, body: JSON.stringify({ name: 'llmgw-ent-poc', version: '0.2.0', models_available: models, runtime: 'lambda', features: { dynamodb_budget: useDynamo, openrouter_fallback: true, admin_api: true } }) };
+  }
+
+  // Admin Routes (/admin/*)
+  if (path.startsWith('/admin/')) {
+    const masterKey = process.env.MASTER_KEY || 'sk-llmgw-master';
+    const authHeader = headers.authorization || headers.Authorization || '';
+    const providedKey = (authHeader as string).replace('Bearer ', '');
+    if (providedKey !== masterKey) {
+      return { statusCode: 403, body: JSON.stringify({ error: { message: 'Forbidden: master key required for admin endpoints', type: 'auth_error' } }) };
+    }
+    const queryString = event.rawQueryString || '';
+    const queryParams: Record<string, string> = {};
+    queryString.split('&').forEach((p: string) => { const [k, v] = p.split('='); if (k) queryParams[k] = decodeURIComponent(v || ''); });
+    const adminResponse = await handleAdminRoute(method, path, body, queryParams);
+    return { statusCode: adminResponse.statusCode, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: adminResponse.body };
   }
 
   // Chat completions
