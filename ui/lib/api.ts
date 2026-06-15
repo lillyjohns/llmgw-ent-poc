@@ -1,4 +1,4 @@
-const API_BASE = 'https://7qegf6lerf.execute-api.us-east-1.amazonaws.com';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://7qegf6lerf.execute-api.us-east-1.amazonaws.com';
 const MASTER_KEY = 'sk-llmgw-master';
 
 async function apiFetch(path: string, options: RequestInit = {}) {

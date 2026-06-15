@@ -25,3 +25,6 @@ coverage/
 
 # Docker
 .docker/
+ui/out/
+ui/.next/
+lambda-deploy/dist/
