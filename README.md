@@ -66,7 +66,7 @@ AWS doesn't have a managed LLM Gateway service comparable to LiteLLM Enterprise.
          │                                   │
          │  API Gateway ── /key/*, /admin/*  │
          │  Cognito ────── SSO (OIDC/SAML)  │
-         │  Amplify ────── Admin Dashboard   │
+         │  CloudFront ── Admin Dashboard   │
          └───────────────────────────────────┘
 ```
 
@@ -87,7 +87,7 @@ llmgw-ent-poc/
 │   ├── lib/
 │   │   ├── network-stack.ts
 │   │   ├── data-stack.ts       # DynamoDB, DAX, S3, Firehose
-│   │   ├── compute-stack.ts    # Fargate, ALB
+│   │   └── llmgw-stack.ts     # Lambda, API GW, DDB, S3, CloudFront
 │   │   ├── auth-stack.ts       # Cognito, API Gateway
 │   │   ├── admin-stack.ts      # Lambda admin APIs
 │   │   └── observability-stack.ts
@@ -95,7 +95,7 @@ llmgw-ent-poc/
 │   ├── tsconfig.json
 │   └── package.json
 ├── src/                     # Application code
-│   ├── proxy/               # Core proxy (Fargate)
+│   ├── proxy/               # Core proxy (Lambda)
 │   │   ├── server.ts           # Express/Fastify HTTP server
 │   │   ├── routes/
 │   │   │   ├── chat-completions.ts
@@ -127,7 +127,6 @@ llmgw-ent-poc/
 │   │   │   └── budget-enforcer.ts
 │   │   ├── streaming/
 │   │   │   └── sse-transformer.ts
-│   │   └── Dockerfile
 │   ├── admin/               # Admin Lambda functions
 │   │   ├── key-generate.ts
 │   │   ├── key-info.ts
@@ -160,23 +159,55 @@ llmgw-ent-poc/
 
 ## 🚀 Quick Start
 
+### Prerequisites
+- AWS CLI configured (with Bedrock access)
+- Node.js 20+
+- No Docker needed (fully serverless)
+
+### Deploy (CDK)
 ```bash
-# Prerequisites
-# - AWS CLI configured with appropriate permissions
-# - Node.js 20+
-# - Docker (for local dev + Fargate builds)
+# Install CDK dependencies
+cd infra && npm install
 
-# Install
+# Build the UI first
+cd ../ui && npm install && npm run build
+
+# Build Lambda code
+cd ../lambda-deploy && npm install && npx tsc
+
+# Deploy everything
+cd ../infra && npx cdk deploy
+```
+
+### Run Locally (Lambda code only)
+```bash
+cd lambda-deploy
 npm install
+npx tsc
+node dist/proxy/server.js
+# → http://localhost:4000
+```
 
-# Deploy infrastructure
-cd infra && npx cdk deploy --all
-
-# Local development
+### Run UI Locally
+```bash
+cd ui
+npm install
 npm run dev
+# → http://localhost:3001
+```
 
-# Run tests
-npm test
+### Test the deployed gateway
+```bash
+export GW=https://7qegf6lerf.execute-api.us-east-1.amazonaws.com
+
+# Health check
+curl $GW/health
+
+# Chat completion
+curl -s $GW/v1/chat/completions \
+  -H "Authorization: Bearer sk-llmgw-demo-all-models" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"claude-haiku","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
 ---
@@ -186,7 +217,7 @@ npm test
 ### Phase 1 — Core Gateway ✈️ (Week 1-2)
 - [ ] OpenAI-compatible `/v1/chat/completions`
 - [ ] Bedrock provider (Claude, Titan)
-- [ ] SSE streaming via Fargate + ALB
+- [ ] SSE streaming via Lambda response streaming
 - [ ] Basic request/response logging
 
 ### Phase 2 — Virtual Keys & Auth (Week 2-3)
@@ -212,7 +243,7 @@ npm test
 - [ ] CloudWatch dashboards
 - [ ] X-Ray distributed tracing
 - [ ] Spend analytics (Firehose → S3 → Athena)
-- [ ] Admin UI (Amplify/React)
+- [x] Admin UI (Next.js + S3 + CloudFront)
 - [ ] Budget alerts (SNS)
 - [ ] Semantic response caching (OpenSearch)
 
@@ -222,11 +253,11 @@ npm test
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Core compute | Fargate | Always-warm, native streaming, no cold starts |
+| Core compute | Lambda | Serverless, zero idle cost, auto-scaling |
 | Admin APIs | Lambda | Cost-efficient for low-traffic admin operations |
 | Primary DB | DynamoDB (single-table) | Serverless, predictable perf, native TTL |
 | Auth | Cognito + JWT | Native OIDC/SAML, built-in API GW integration |
-| Streaming | ALB + Fargate (chunked) | Simplest SSE path, no WebSocket complexity |
+| Streaming | Lambda response streaming | Via API Gateway HTTP API |
 | IaC | CDK (TypeScript) | Type-safe, same language as app code |
 | Config format | YAML (LiteLLM-compatible) | Easier migration from LiteLLM deployments |
 | Language | TypeScript | Fast Lambda cold starts, shared types, ecosystem |
