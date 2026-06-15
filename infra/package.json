@@ -1,0 +1,23 @@
+{
+  "name": "llmgw-infra",
+  "version": "1.0.0",
+  "bin": {
+    "llmgw": "bin/app.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "cdk": "cdk",
+    "deploy": "cdk deploy --all",
+    "destroy": "cdk destroy --all",
+    "synth": "cdk synth"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.170.0",
+    "constructs": "^10.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "aws-cdk": "^2.170.0"
+  }
+}
