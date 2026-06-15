@@ -2,72 +2,62 @@
 
 **AWS-Native LLM Gateway — Enterprise Edition (POC)**
 
-A serverless, AWS-native alternative to LiteLLM Enterprise Gateway. Provides an OpenAI-compatible API layer with enterprise controls: virtual keys, spend tracking, routing/failover, guardrails, multi-tenancy, and audit logging — all built on AWS managed services.
+A serverless, AWS-native alternative to LiteLLM Enterprise Gateway. Provides an OpenAI-compatible API layer with enterprise controls: virtual keys, spend tracking, routing/failover, guardrails, multi-tenancy — all built on AWS managed services.
 
 ---
 
 ## 🎯 Why This Exists
 
-AWS doesn't have a managed LLM Gateway service comparable to LiteLLM Enterprise. This project fills that gap with a fully AWS-native solution that offers:
+AWS doesn't have a managed LLM Gateway service comparable to LiteLLM Enterprise. This project fills that gap:
 
-- **Security & Compliance**: Your VPC, your data, CloudTrail audit, IAM integration
-- **Serverless Economics**: Pay-per-request at scale (vs. fixed LiteLLM license)
-- **Deep AWS Integration**: PrivateLink to Bedrock, Secrets Manager rotation, Cognito SSO
-- **Enterprise Controls**: Per-key budgets, team hierarchy, guardrails, rate limiting
+- **Serverless Economics**: Lambda + API Gateway = pay only per request (zero idle cost)
+- **Deep AWS Integration**: Bedrock native, IAM, CloudWatch, DynamoDB
+- **Enterprise Controls**: Per-key budgets, team hierarchy, model ACLs, BU tagging
+- **Multi-Provider Failover**: Bedrock primary → OpenRouter fallback (automatic)
+- **Drop-in Compatible**: Any OpenAI SDK works — just change `base_url`
 
 ---
 
 ## 🏗️ Architecture
 
+![Architecture Diagram](docs/architecture-diagram.png)
+
 ```
-┌─────────────────────────────────────────────────────────┐
-│                      Clients                            │
-│         (OpenAI SDK, curl, any OpenAI-compatible)       │
-└────────────────────────┬────────────────────────────────┘
-                         │
-              ┌──────────▼──────────┐
-              │  API Gateway (REST) │  ← WAF, throttling, response streaming
-              └──────────┬──────────┘
-                         │
-              ┌──────────▼──────────┐
-              │   Lambda Function   │  ← Core Proxy (serverless)
-              │  ┌───────────────┐  │
-              │  │ Auth (DynamoDB)│  │  ← Virtual keys + persistent budget
-              │  │ Router        │  │  ← Weighted, failover, multi-provider
-              │  │ Guardrails    │  │  ← Pre/post-call hooks
-              │  │ Cost Tracker  │  │  ← Atomic spend via DDB UpdateItem
-              │  └───────────────┘  │
-              └──────────┬──────────┘
-                         │
-         ┌───────────────┼───────────────┐
-         ▼               ▼               ▼
-┌─────────────┐  ┌─────────────┐  ┌─────────────┐
-│ AWS Bedrock │  │  OpenRouter  │  │  OpenAI API │
-│ (Claude,    │  │ (fallback)   │  │ (passthru)  │
-│  DeepSeek,  │  │  Nemotron,   │  │             │
-│  Llama,     │  │  Gemma, etc  │  │             │
-│  Nova)      │  │              │  │             │
-└─────────────┘  └─────────────┘  └─────────────┘
+Clients (OpenAI SDK / curl)
+         │
+         ▼
+┌─────────────────────────┐
+│  HTTP API Gateway       │  ← CORS, catch-all route
+│  (7qegf6lerf)           │
+└────────────┬────────────┘
+             │
+             ▼
+┌─────────────────────────┐
+│  Lambda: llmgw-gateway  │  ← Node 20, 512MB, 60s
+│  ├── Auth (DynamoDB)    │  ← Virtual keys + budget check
+│  ├── Router             │  ← Weighted shuffle + failover
+│  ├── Cost Tracker       │  ← Token count → $ → DDB atomic update
+│  ├── BU Tagging         │  ← requestMetadata injected per team
+│  └── Admin API          │  ← /admin/* CRUD (keys/teams/orgs)
+└────────────┬────────────┘
+             │
+    ┌────────┼────────┐
+    ▼        ▼        ▼
+┌────────┐┌────────┐┌──────────┐
+│Bedrock ││Bedrock ││OpenRouter│
+│Claude  ││DeepSeek││(fallback)│
+│Haiku   ││Nova    ││Nemotron  │
+│Llama   ││        ││          │
+└────────┘└────────┘└──────────┘
 
-         ┌───────────────────────────────────┐
-         │         Data & Control Plane      │
-         │                                   │
-         │  DynamoDB ─── Keys, Spend, Config │
-         │  DAX ──────── Hot-path cache      │
-         │  Firehose ──► S3 ──► Athena       │
-         │  Secrets Mgr ── Provider API keys │
-         │  Bedrock Guardrails ── PII/Toxic  │
-         │  CloudWatch ── Metrics & Alarms   │
-         │  X-Ray ──────── Distributed trace │
-         └───────────────────────────────────┘
+┌─────────────────────────┐
+│  DynamoDB: llmgw-keys   │  ← Keys, Teams, Orgs, Users, Guardrails, Spend
+└─────────────────────────┘
 
-         ┌───────────────────────────────────┐
-         │         Admin Plane (Lambda)      │
-         │                                   │
-         │  API Gateway ── /key/*, /admin/*  │
-         │  Cognito ────── SSO (OIDC/SAML)  │
-         │  CloudFront ── Admin Dashboard   │
-         └───────────────────────────────────┘
+┌─────────────────────────┐
+│  CloudFront → S3        │  ← Admin UI (Next.js static)
+│  (d3czi4uxbud7mg)       │
+└─────────────────────────┘
 ```
 
 ---
@@ -76,83 +66,67 @@ AWS doesn't have a managed LLM Gateway service comparable to LiteLLM Enterprise.
 
 ```
 llmgw-ent-poc/
-├── README.md
-├── docs/
-│   ├── ARCHITECTURE.md      # Detailed architecture decisions
-│   ├── FEATURE_MATRIX.md    # LiteLLM vs. this project comparison
-│   └── API.md               # OpenAI-compatible API reference
-├── infra/                   # CDK Infrastructure
-│   ├── bin/
-│   │   └── app.ts
-│   ├── lib/
-│   │   ├── network-stack.ts
-│   │   ├── data-stack.ts       # DynamoDB, DAX, S3, Firehose
-│   │   └── llmgw-stack.ts     # Lambda, API GW, DDB, S3, CloudFront
-│   │   ├── auth-stack.ts       # Cognito, API Gateway
-│   │   ├── admin-stack.ts      # Lambda admin APIs
-│   │   └── observability-stack.ts
-│   ├── cdk.json
-│   ├── tsconfig.json
+├── lambda-deploy/           # Deployed Lambda code
+│   ├── src/
+│   │   ├── lambda-handler.ts    # Entry point (route dispatch)
+│   │   ├── proxy/
+│   │   │   ├── auth/
+│   │   │   │   ├── key-validator.ts       # In-memory (demo keys)
+│   │   │   │   └── dynamo-key-validator.ts # DynamoDB (production keys)
+│   │   │   ├── providers/
+│   │   │   │   ├── base.ts
+│   │   │   │   ├── bedrock.ts      # Converse API + BU tag injection
+│   │   │   │   ├── openai.ts
+│   │   │   │   └── openrouter.ts   # Fallback provider
+│   │   │   ├── router/
+│   │   │   │   └── index.ts        # Weighted shuffle + failover
+│   │   │   ├── cost/
+│   │   │   │   └── price-calculator.ts  # Token → $ conversion
+│   │   │   ├── admin/
+│   │   │   │   ├── admin-routes.ts      # Key/Team/Org CRUD
+│   │   │   │   ├── guardrail-routes.ts
+│   │   │   │   ├── user-routes.ts
+│   │   │   │   └── org-routes.ts
+│   │   │   ├── routes/
+│   │   │   │   ├── chat-completions.ts
+│   │   │   │   ├── embeddings.ts
+│   │   │   │   ├── health.ts
+│   │   │   │   ├── key-management.ts
+│   │   │   │   └── models.ts
+│   │   │   └── streaming/
+│   │   │       └── sse-transformer.ts
+│   │   └── shared/
+│   │       ├── config.ts
+│   │       ├── dynamo-client.ts
+│   │       ├── logger.ts
+│   │       └── types.ts
+│   ├── config/
+│   │   └── gateway-config.yaml  # Model routing config
 │   └── package.json
-├── src/                     # Application code
-│   ├── proxy/               # Core proxy (Lambda)
-│   │   ├── server.ts           # Express/Fastify HTTP server
-│   │   ├── routes/
-│   │   │   ├── chat-completions.ts
-│   │   │   ├── embeddings.ts
-│   │   │   └── models.ts
-│   │   ├── auth/
-│   │   │   ├── key-validator.ts
-│   │   │   └── jwt-validator.ts
-│   │   ├── router/
-│   │   │   ├── index.ts
-│   │   │   ├── strategies/
-│   │   │   │   ├── weighted-shuffle.ts
-│   │   │   │   ├── latency-based.ts
-│   │   │   │   ├── cost-based.ts
-│   │   │   │   └── failover.ts
-│   │   │   └── circuit-breaker.ts
-│   │   ├── providers/
-│   │   │   ├── bedrock.ts
-│   │   │   ├── openai.ts
-│   │   │   ├── anthropic.ts
-│   │   │   └── base.ts
-│   │   ├── guardrails/
-│   │   │   ├── pre-call.ts
-│   │   │   ├── post-call.ts
-│   │   │   └── bedrock-guardrails.ts
-│   │   ├── cost/
-│   │   │   ├── token-counter.ts
-│   │   │   ├── price-calculator.ts
-│   │   │   └── budget-enforcer.ts
-│   │   ├── streaming/
-│   │   │   └── sse-transformer.ts
-│   ├── admin/               # Admin Lambda functions
-│   │   ├── key-generate.ts
-│   │   ├── key-info.ts
-│   │   ├── key-revoke.ts
-│   │   ├── team-manage.ts
-│   │   ├── spend-report.ts
-│   │   └── config-update.ts
-│   └── shared/              # Shared utilities
-│       ├── dynamo-client.ts
-│       ├── types.ts
-│       ├── config.ts
-│       └── logger.ts
-├── config/
-│   └── gateway-config.yaml  # Model routing config (LiteLLM-compatible format)
-├── test/
-│   ├── unit/
-│   ├── integration/
-│   └── load/
-├── .github/
-│   └── workflows/
-│       ├── ci.yml
-│       └── deploy.yml
-├── package.json
-├── tsconfig.json
-├── .gitignore
-└── .env.example
+├── ui/                      # Admin Dashboard (Next.js 14)
+│   ├── app/
+│   │   ├── page.tsx             # Dashboard (live stats from API)
+│   │   ├── keys/page.tsx        # Key management
+│   │   ├── teams/page.tsx
+│   │   ├── models/page.tsx
+│   │   ├── guardrails/page.tsx
+│   │   ├── playground/page.tsx
+│   │   ├── usage/page.tsx
+│   │   └── logs/page.tsx
+│   ├── lib/
+│   │   └── api.ts               # API client (→ real backend)
+│   └── package.json
+├── infra/                   # CDK Infrastructure (one-command deploy)
+│   ├── bin/app.ts
+│   ├── lib/llmgw-stack.ts      # All resources in single stack
+│   ├── cdk.json
+│   └── package.json
+├── docs/
+│   ├── architecture-diagram.png
+│   ├── FEATURE_MATRIX.md
+│   ├── DEMO_SCRIPT.md
+│   └── API.md
+└── README.md
 ```
 
 ---
@@ -162,90 +136,65 @@ llmgw-ent-poc/
 ### Prerequisites
 - AWS CLI configured (with Bedrock access)
 - Node.js 20+
-- No Docker needed (fully serverless)
+- No Docker needed
 
-### Deploy (CDK)
+### Deploy to AWS (CDK)
 ```bash
-# Install CDK dependencies
-cd infra && npm install
+# 1. Build UI
+cd ui && npm install && npm run build && cd ..
 
-# Build the UI first
-cd ../ui && npm install && npm run build
-
-# Build Lambda code
-cd ../lambda-deploy && npm install && npx tsc
-
-# Deploy everything
-cd ../infra && npx cdk deploy
+# 2. Deploy everything (Lambda + API GW + DDB + S3 + CloudFront)
+cd infra && npm install && npx cdk deploy
 ```
 
-### Run Locally (Lambda code only)
+### Run Locally
 ```bash
-cd lambda-deploy
-npm install
-npx tsc
-node dist/proxy/server.js
-# → http://localhost:4000
+# Lambda proxy (API on port 4000)
+cd lambda-deploy && npm install && npx tsc && node dist/proxy/server.js
+
+# Admin UI (port 3001)
+cd ui && npm install && npm run dev
 ```
 
-### Run UI Locally
-```bash
-cd ui
-npm install
-npm run dev
-# → http://localhost:3001
-```
-
-### Test the deployed gateway
+### Test Deployed Gateway
 ```bash
 export GW=https://7qegf6lerf.execute-api.us-east-1.amazonaws.com
 
-# Health check
+# Health
 curl $GW/health
 
-# Chat completion
+# Chat (any OpenAI-compatible client works)
 curl -s $GW/v1/chat/completions \
   -H "Authorization: Bearer sk-llmgw-demo-all-models" \
   -H "Content-Type: application/json" \
   -d '{"model":"claude-haiku","messages":[{"role":"user","content":"Hello"}]}'
+
+# Admin: list keys
+curl -s -H "Authorization: Bearer sk-llmgw-master" $GW/admin/key/list
 ```
 
 ---
 
-## 🗺️ Roadmap
+## ⚡ Key Features (Deployed & Working)
 
-### Phase 1 — Core Gateway ✈️ (Week 1-2)
-- [ ] OpenAI-compatible `/v1/chat/completions`
-- [ ] Bedrock provider (Claude, Titan)
-- [ ] SSE streaming via Lambda response streaming
-- [ ] Basic request/response logging
+| Feature | Status |
+|---------|--------|
+| OpenAI-compatible `/v1/chat/completions` | ✅ |
+| 7 models (Claude, DeepSeek, Haiku, Nova, Llama, best-available, OpenRouter) | ✅ |
+| Virtual keys with DynamoDB persistence | ✅ |
+| Per-key budget enforcement (pre-request) | ✅ |
+| Token counting + spend tracking (atomic) | ✅ |
+| Model ACL per key | ✅ |
+| Auto-failover Bedrock → OpenRouter | ✅ |
+| Weighted load balancing | ✅ |
+| BU tag injection (Bedrock requestMetadata) | ✅ |
+| Multi-tenant (Org → Team → User → Key) | ✅ |
+| Admin API (30+ CRUD endpoints) | ✅ |
+| Admin UI (real-time dashboard) | ✅ |
+| Guardrails CRUD (PII masking config) | ✅ |
+| CDK deployment (single stack) | ✅ |
 
-### Phase 2 — Virtual Keys & Auth (Week 2-3)
-- [ ] Key generation/revocation API
-- [ ] DynamoDB key store + DAX cache
-- [ ] Per-key model ACL + budget
-- [ ] Cognito JWT validation
-
-### Phase 3 — Routing & Reliability (Week 3-4)
-- [ ] Multi-provider routing config
-- [ ] Weighted shuffle + failover strategies
-- [ ] Circuit breaker pattern
-- [ ] Retry with exponential backoff
-
-### Phase 4 — Enterprise Controls (Week 4-6)
-- [ ] Org → Team → Project → Key hierarchy
-- [ ] Guardrails pipeline (Bedrock Guardrails + Comprehend)
-- [ ] Rate limiting (TPM via DDB atomic counters)
-- [ ] Audit logging (DDB Streams → S3)
-- [ ] Secrets Manager rotation for provider keys
-
-### Phase 5 — Observability & Admin UI (Week 6-8)
-- [ ] CloudWatch dashboards
-- [ ] X-Ray distributed tracing
-- [ ] Spend analytics (Firehose → S3 → Athena)
-- [x] Admin UI (Next.js + S3 + CloudFront)
-- [ ] Budget alerts (SNS)
-- [ ] Semantic response caching (OpenSearch)
+See [docs/FEATURE_MATRIX.md](docs/FEATURE_MATRIX.md) for full LiteLLM comparison.
 
 ---
 
@@ -253,40 +202,34 @@ curl -s $GW/v1/chat/completions \
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Core compute | Lambda | Serverless, zero idle cost, auto-scaling |
-| Admin APIs | Lambda | Cost-efficient for low-traffic admin operations |
-| Primary DB | DynamoDB (single-table) | Serverless, predictable perf, native TTL |
-| Auth | Cognito + JWT | Native OIDC/SAML, built-in API GW integration |
-| Streaming | Lambda response streaming | Via API Gateway HTTP API |
-| IaC | CDK (TypeScript) | Type-safe, same language as app code |
-| Config format | YAML (LiteLLM-compatible) | Easier migration from LiteLLM deployments |
-| Language | TypeScript | Fast Lambda cold starts, shared types, ecosystem |
+| Compute | Lambda | Zero idle cost, auto-scaling, no patching |
+| API | HTTP API Gateway | Cheapest, native CORS, Lambda integration |
+| Database | DynamoDB (single-table) | Serverless, PAY_PER_REQUEST, atomic counters |
+| Admin UI | Next.js static → S3 + CloudFront | Zero-cost hosting, global CDN |
+| IaC | CDK (TypeScript) | Type-safe, single stack, same language as app |
+| Config | YAML (LiteLLM-compatible) | Easy migration from LiteLLM |
+| Fallback | OpenRouter | Free tier available, multi-model |
 
 ---
 
-## 🔑 Environment Variables
+## 🔑 Environment Variables (Lambda)
 
 ```bash
-# Required
-AWS_REGION=us-east-1
 DYNAMODB_TABLE_NAME=llmgw-keys
-COGNITO_USER_POOL_ID=us-east-1_xxxxx
-
-# Provider keys (stored in Secrets Manager, referenced here for local dev)
-OPENAI_API_KEY=sk-xxx
-ANTHROPIC_API_KEY=sk-ant-xxx
-
-# Optional
-DAX_ENDPOINT=dax://xxx.amazonaws.com
-FIREHOSE_STREAM_NAME=llmgw-logs
-GUARDRAIL_ID=xxx
+USE_DYNAMODB=true
+MASTER_KEY=sk-llmgw-master          # Admin API auth
+CONFIG_PATH=/var/task/gateway-config.yaml
+OPENROUTER_API_KEY=sk-or-v1-...     # Fallback provider
 ```
 
 ---
 
-## 📊 Feature Comparison with LiteLLM Enterprise
+## 📎 Links
 
-See [docs/FEATURE_MATRIX.md](docs/FEATURE_MATRIX.md) for the full comparison.
+- **API Endpoint:** https://7qegf6lerf.execute-api.us-east-1.amazonaws.com
+- **Admin UI:** https://d3czi4uxbud7mg.cloudfront.net
+- **Feature Matrix:** [docs/FEATURE_MATRIX.md](docs/FEATURE_MATRIX.md)
+- **Demo Script:** [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md)
 
 ---
 
