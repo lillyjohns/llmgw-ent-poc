@@ -18,7 +18,6 @@ export class LlmGatewayStack extends cdk.Stack {
     // 1. DynamoDB Table (single-table design)
     // ========================================
     const table = new dynamodb.Table(this, 'LlmGwTable', {
-      tableName: 'llmgw-keys',
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
@@ -29,18 +28,13 @@ export class LlmGatewayStack extends cdk.Stack {
     // ========================================
     // 2. Lambda Function (Gateway)
     // ========================================
+    // Lambda code: pre-built locally (npm ci && npx tsc in lambda-deploy/)
+    // Includes: dist/, node_modules/, gateway-config.yaml
     const gatewayFn = new lambda.Function(this, 'LlmGwFunction', {
-      functionName: 'llmgw-gateway',
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'dist/lambda-handler.handler',
       code: lambda.Code.fromAsset('../lambda-deploy', {
-        bundling: {
-          image: lambda.Runtime.NODEJS_20_X.bundlingImage,
-          command: [
-            'bash', '-c',
-            'npm ci && npx tsc && cp -r dist node_modules gateway-config.yaml /asset-output/',
-          ],
-        },
+        exclude: ['src', 'tsconfig.json', '*.ts', '.git'],
       }),
       memorySize: 512,
       timeout: cdk.Duration.seconds(60),
@@ -48,7 +42,8 @@ export class LlmGatewayStack extends cdk.Stack {
         DYNAMODB_TABLE_NAME: table.tableName,
         USE_DYNAMODB: 'true',
         MASTER_KEY: 'sk-llmgw-master', // TODO: move to Secrets Manager
-        CONFIG_PATH: '/var/task/gateway-config.yaml',
+        CONFIG_PATH: './gateway-config.yaml',
+        OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || '', // Set via: export OPENROUTER_API_KEY=sk-or-...
         NODE_OPTIONS: '--enable-source-maps',
       },
       tracing: lambda.Tracing.ACTIVE,
@@ -103,7 +98,6 @@ export class LlmGatewayStack extends cdk.Stack {
     // 4. S3 Bucket (Admin UI)
     // ========================================
     const uiBucket = new s3.Bucket(this, 'AdminUiBucket', {
-      bucketName: `llmgw-admin-ui-${this.account}`,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
