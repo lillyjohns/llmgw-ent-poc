@@ -90,7 +90,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
 
     try {
       const startTime = Date.now();
-      const response = await deployment.provider.complete({ model: deployment.providerModel, messages, temperature, max_tokens, top_p });
+      const response = await deployment.provider.complete({ model: deployment.providerModel, messages, temperature, max_tokens, top_p, metadata: { key_id: keyInfo.key_id, team_id: keyInfo.team_id || 'default', key_name: keyInfo.key_alias || keyInfo.key_id } });
       const latencyMs = Date.now() - startTime;
 
       // Track cost
@@ -123,7 +123,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
         if (fallback) {
           console.log(`Attempting fallback: ${model} -> ${fallback.id}`);
           const startTime = Date.now();
-          const response = await fallback.provider.complete({ model: fallback.providerModel, messages, temperature, max_tokens, top_p });
+          const response = await fallback.provider.complete({ model: fallback.providerModel, messages, temperature, max_tokens, top_p, metadata: { key_id: keyInfo.key_id, team_id: keyInfo.team_id || 'default', key_name: keyInfo.key_alias || keyInfo.key_id } });
           const latencyMs = Date.now() - startTime;
 
           return {

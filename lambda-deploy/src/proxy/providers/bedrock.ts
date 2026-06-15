@@ -31,10 +31,18 @@ export class BedrockProvider extends BaseProvider {
         content: [{ text: m.content }],
       }));
 
+    // Inject BU tag into Bedrock requestMetadata for invocation logging & cost allocation
+    const buTag = (params as any).metadata?.team_id || (params as any).metadata?.key_id || 'unknown';
+
     const command = new ConverseCommand({
       modelId,
       messages,
       ...(system.length > 0 && { system }),
+      requestMetadata: {
+        BU: buTag,
+        key_id: (params as any).metadata?.key_id || 'unknown',
+        key_name: (params as any).metadata?.key_name || 'unknown',
+      },
       inferenceConfig: {
         maxTokens: params.max_tokens || 4096,
         temperature: params.temperature,
@@ -85,10 +93,18 @@ export class BedrockProvider extends BaseProvider {
         content: [{ text: m.content }],
       }));
 
+    // Inject BU tag into Bedrock requestMetadata for invocation logging & cost allocation
+    const streamBuTag = (params as any).metadata?.team_id || (params as any).metadata?.key_id || 'unknown';
+
     const command = new ConverseStreamCommand({
       modelId,
       messages,
       ...(system.length > 0 && { system }),
+      requestMetadata: {
+        BU: streamBuTag,
+        key_id: (params as any).metadata?.key_id || 'unknown',
+        key_name: (params as any).metadata?.key_name || 'unknown',
+      },
       inferenceConfig: {
         maxTokens: params.max_tokens || 4096,
         temperature: params.temperature,
