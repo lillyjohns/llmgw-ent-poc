@@ -28,3 +28,5 @@ coverage/
 ui/out/
 ui/.next/
 lambda-deploy/dist/
+infra/node_modules/
+lambda-deploy/node_modules/

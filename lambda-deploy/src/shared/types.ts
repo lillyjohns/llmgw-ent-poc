@@ -1,5 +1,6 @@
 export interface KeyInfo {
   key_id: string;
+  key_alias?: string;
   team_id?: string;
   org_id?: string;
   models: string[];
